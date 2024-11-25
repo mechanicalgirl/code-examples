@@ -1,0 +1,116 @@
+name: Key Comparison
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 12 * * *"
+
+env:
+  BRANCH_NAME: keys_update--${{ github.run_id }}-${{ github.run_attempt }}
+  DEPLOY_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+  GH_TOKEN: ${{ secrets.GITHUB_ACCESS_TOKEN }}
+  SLACK_BOT_TOKEN: ${{ secrets.SLACK_NOTIFICATIONS_TOKEN }}
+
+jobs:
+  generate-pull-request:
+    name: Generate Pull Request
+    runs-on: ubuntu-latest
+    outputs:
+      changes: ${{ steps.git-check.outputs.changes }}
+    steps:
+      - name: Check out repository to the runner
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: configure git
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git checkout main
+          git fetch origin
+      - name: setup python
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.12
+      - name: Run script
+        run: python3 .github/scripts/keys.py
+      - name: check for changes
+        id: git-check
+        run: |
+          if git diff --quiet; then
+            echo "No changes detected, exiting workflow successfully"
+            exit 0
+          fi
+          echo "changes=true" >> $GITHUB_OUTPUT
+      - name: continue workflow
+        if: steps.git-check.outputs.changes == 'true'
+        run: echo "Changes detected, continuing workflow"
+      - name: cut a branch
+        if: steps.git-check.outputs.changes == 'true'
+        run: |
+          git checkout -b ${{ env.BRANCH_NAME }}
+          git push -u origin ${{ env.BRANCH_NAME }}
+      - name: stage changed files
+        if: steps.git-check.outputs.changes == 'true'
+        run: git add .
+      - name: commit changed files
+        if: steps.git-check.outputs.changes == 'true'
+        run: git commit -m "replacing keys"
+      - name: fetch from branch
+        if: steps.git-check.outputs.changes == 'true'
+        run: git fetch origin ${{ env.BRANCH_NAME }}
+      - name: push code to branch
+        if: steps.git-check.outputs.changes == 'true'
+        run: git push origin ${{ env.BRANCH_NAME }}
+      - name: generate pull request
+        if: steps.git-check.outputs.changes == 'true'
+        run: gh pr create -B main -H ${{ env.BRANCH_NAME }} --title "${{ env.BRANCH_NAME }}" --body "Created by Github action"
+
+    notify_slack:
+    name: Notify Slack Channel on Job Run 
+    needs: generate-pull-request
+    if: needs.generate-pull-request.outputs.changes == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get PR
+        id: get-pr
+        shell: python
+        run: |
+          import os
+          import subprocess
+          pull_request_id = ''
+          prlist = subprocess.run(['gh','pr','list'], capture_output = True, text=True)
+          mylist = prlist.stdout.split('\n')
+          for m in mylist:
+              if 'keys_update--' in m:
+                  pull_request_id = m.split('\t')[0]
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+            f.write(pull_request_id)
+      - name: Notify Channel
+        uses: slackapi/slack-github-action@v1.26.0
+        with:
+          channel-id: "#my-channel-name"
+          payload: |
+            {
+              "attachments": [
+                {
+                  "color": "#36A64F",
+                  "blocks": [
+                    {
+                      "type": "header",
+                      "text": {
+                        "type": "plain_text",
+                        "text": ":checkmark: Key Comparison Complete"
+                      }
+                    },
+                    {
+                      "type": "section",
+                      "text": {
+                        "type": "mrkdwn",
+                        "text": "*View Deploy:* <${{ env.DEPLOY_URL }}>"
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
