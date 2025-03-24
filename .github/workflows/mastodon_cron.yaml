@@ -1,0 +1,36 @@
+name: Mastodon Post
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "15 0 * * *"
+
+env:
+  MASTODON_SERVER: ${{ secrets.MY_MASTODON_SERVER }}
+  MASTODON_TOKEN: ${{ secrets.MY_MASTODON_TOKEN }}
+
+jobs:
+  generate-playlist:
+    name: Generate and Post
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository to the runner
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: configure git
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git checkout main
+          git fetch origin
+      - name: setup python
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.12
+      - name: Install dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install requests==2.32.3
+      - name: Run script
+        run: python3 .github/scripts/mastodon_post.py ${{ env.MASTODON_SERVER }} ${{ env.MASTODON_TOKEN }}
